@@ -43,12 +43,16 @@ func New(subs *subscription.TopicRegistry, sessions *session.SessionRegistry, me
 // subscriber snapshot is taken once at the start of the batch so a
 // subscription that joins mid-batch never receives a partial batch.
 func (f *Fanout) Dispatch(ctx context.Context, topic string, events []model.Event) error {
+	// Snapshot the subscriber set once for the whole batch. Re-querying per
+	// event would let a session that subscribes mid-batch slip into a later
+	// event, receiving the tail of the batch (and possibly duplicates or
+	// out-of-order events) instead of waiting for the next complete batch.
+	sessions := f.takeSnapshot(topic)
+	if len(sessions) == 0 {
+		return nil
+	}
 	var firstErr error
 	for _, ev := range events {
-		sessions := f.subs.Subscribers(topic)
-		if len(sessions) == 0 {
-			continue
-		}
 		for _, sid := range sessions {
 			if err := f.deliver(ctx, sid, ev); err != nil && firstErr == nil {
 				firstErr = err
