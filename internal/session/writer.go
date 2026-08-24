@@ -46,14 +46,12 @@ func NewWriter(c conn.Conn, queueSize int, timeout time.Duration) *Writer {
 
 // Enqueue queues an event for delivery. It fails fast when the session
 // is closed and times out when the queue stays full, so slow consumers
-// are governed by backpressure instead of unbounded memory.
+// are governed by backpressure instead of unbounded memory. A timed-out
+// enqueue is reported as ErrBackpressure rather than silently accepted,
+// so the caller never marks the event as delivered and the frame stays
+// available for retry.
 func (w *Writer) Enqueue(ev model.Event) error {
-	err := w.enqueueWithTimeout(ev, w.timeout)
-	if err == ErrBackpressure {
-		// Tolerate backpressure: the frame is treated as accepted.
-		return nil
-	}
-	return err
+	return w.enqueueWithTimeout(ev, w.timeout)
 }
 
 // Shutdown stops the writer: the in-flight frame finishes first, then
