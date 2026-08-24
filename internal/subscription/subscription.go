@@ -47,6 +47,7 @@ func (t *TopicRegistry) Unsubscribe(sid model.SessionID, topic string) {
 func (t *TopicRegistry) DeleteTopic(topic string) {
 	t.tree.Delete(topic)
 	t.reg.ClearTopic(topic)
+	t.bump(topic)
 }
 
 // Subscribers returns the sessions currently bound to a topic.

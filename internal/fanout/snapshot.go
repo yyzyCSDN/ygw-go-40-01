@@ -16,15 +16,21 @@ type CacheStats struct {
 }
 
 // takeSnapshot returns the subscribers of a topic, reusing the cache
-// only while the topic version is unchanged.
+// only while the topic version is unchanged. A subscribe, unsubscribe,
+// or topic deletion bumps the version and forces the next dispatch to
+// rebuild the snapshot from the current membership, so a deleted
+// topic never re-broadcasts to its pre-deletion subscribers.
 func (f *Fanout) takeSnapshot(topic string) []model.SessionID {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if entry, ok := f.cache[topic]; ok {
+	version := f.subs.Version(topic)
+	if entry, ok := f.cache[topic]; ok && entry.version == version {
+		f.hits++
 		return entry.sessions
 	}
 	sessions := f.subs.SnapshotBatch(topic)
-	f.cache[topic] = snapshotEntry{version: f.subs.Version(topic), sessions: sessions}
+	f.cache[topic] = snapshotEntry{version: version, sessions: sessions}
+	f.misses++
 	return sessions
 }
 

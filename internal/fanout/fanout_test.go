@@ -3,6 +3,7 @@ package fanout
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,13 +14,29 @@ import (
 )
 
 type recordConn struct {
+	mu      sync.Mutex
 	records []string
 }
 
 func (c *recordConn) WriteMessage(kind int, data []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.records = append(c.records, string(data))
 	return nil
 }
+
+func (c *recordConn) Records() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]string, len(c.records))
+	copy(out, c.records)
+	return out
+}
+
+// Lock/Unlock let tests wait on the connection without racing the
+// session writer goroutine.
+func (c *recordConn) Lock()   { c.mu.Lock() }
+func (c *recordConn) Unlock() { c.mu.Unlock() }
 
 func (c *recordConn) ReadMessage() (int, []byte, error) {
 	return 0, nil, errors.New("closed")
