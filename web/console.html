@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EventPush Console</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #f6f8fa; color: #1f2328; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; }
+  .card { background: #fff; border: 1px solid #d8dee4; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input[type=text] { flex: 1; min-width: 180px; padding: 8px; border: 1px solid #d8dee4; border-radius: 6px; }
+  button { padding: 8px 14px; border: 1px solid #d8dee4; border-radius: 6px; background: #f6f8fa; cursor: pointer; }
+  button.primary { background: #0969da; border-color: #0969da; color: #fff; }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  pre { background: #0d1117; color: #e6edf3; padding: 12px; border-radius: 6px; overflow: auto; max-height: 420px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: #ddf4ff; color: #0969da; }
+  .badge.on { background: #dafbe1; color: #1a7f37; }
+  .badge.off { background: #ffebe9; color: #cf222e; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>EventPush Console</h1>
+  <p class="row"><span id="connBadge" class="badge off">disconnected</span>
+  <span id="sessionId" class="badge">session: -</span></p>
+
+  <div class="card">
+    <h2>连接</h2>
+    <div class="row">
+      <input id="endpoint" type="text" value="ws://localhost:8080/ws" placeholder="WebSocket 地址">
+      <input id="session" type="text" placeholder="会话 ID（留空自动生成）">
+      <input id="topics" type="text" placeholder="初始订阅，逗号分隔，如 device/a,device/b">
+      <button id="connectBtn" class="primary">连接</button>
+      <button id="disconnectBtn">断开</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>订阅管理</h2>
+    <div class="row">
+      <input id="subTopic" type="text" placeholder="主题，如 device/a">
+      <button id="subBtn">订阅</button>
+      <button id="unsubBtn">退订</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>发布测试事件</h2>
+    <div class="row">
+      <input id="pubTopic" type="text" placeholder="主题">
+      <input id="pubPayload" type="text" placeholder="消息内容">
+      <button id="pubBtn" class="primary">发布</button>
+    </div>
+    <p id="pubResult" style="min-height:1em;color:#57606a;font-size:13px;"></p>
+  </div>
+
+  <div class="card">
+    <h2>实时事件</h2>
+    <div class="row">
+      <button id="clearBtn">清空</button>
+      <button id="ackBtn">确认已收到</button>
+    </div>
+    <pre id="events">（尚未收到事件）</pre>
+  </div>
+
+  <div class="card">
+    <h2>服务状态</h2>
+    <button id="statusBtn">刷新</button>
+    <pre id="status">（点击刷新）</pre>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  let ws = null;
+  let lastSeq = 0;
+  let sid = "";
+
+  function log(line) {
+    const box = $("events");
+    if (box.textContent === "（尚未收到事件）") box.textContent = "";
+    box.textContent += line + "\n";
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function setBadge(on) {
+    const badge = $("connBadge");
+    badge.textContent = on ? "connected" : "disconnected";
+    badge.className = "badge " + (on ? "on" : "off");
+  }
+
+  function connect() {
+    const endpoint = $("endpoint").value.trim();
+    let url = endpoint;
+    const params = new URLSearchParams();
+    sid = $("session").value.trim();
+    if (sid) params.set("session", sid);
+    const topics = $("topics").value.trim();
+    if (topics) params.set("topics", topics);
+    const qs = params.toString();
+    if (qs) url += (url.includes("?") ? "&" : "?") + qs;
+    try {
+      ws = new WebSocket(url);
+    } catch (err) {
+      log("连接失败: " + err.message);
+      return;
+    }
+    ws.onopen = () => {
+      setBadge(true);
+      sid = sid || "已由服务端分配";
+      $("sessionId").textContent = "session: " + sid;
+      log("已连接 " + endpoint);
+      refreshStatus();
+    };
+    ws.onmessage = (event) => {
+      const text = String(event.data);
+      log("<< " + text);
+      const m = text.split("|");
+      if (m.length >= 3) {
+        const seq = parseInt(m[0], 10);
+        if (!Number.isNaN(seq) && seq > lastSeq) lastSeq = seq;
+      }
+    };
+    ws.onclose = () => { setBadge(false); log("连接已关闭"); ws = null; };
+    ws.onerror = () => log("连接出错");
+  }
+
+  function send(line) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      log("未连接，无法发送: " + line);
+      return false;
+    }
+    ws.send(line);
+    return true;
+  }
+
+  async function refreshStatus() {
+    try {
+      const res = await fetch("/api/status");
+      $("status").textContent = JSON.stringify(await res.json(), null, 2);
+    } catch (err) {
+      $("status").textContent = "状态获取失败: " + err.message;
+    }
+  }
+
+  async function publish() {
+    const topic = $("pubTopic").value.trim();
+    const payload = $("pubPayload").value.trim();
+    $("pubResult").textContent = "";
+    if (!topic) { $("pubResult").textContent = "请填写主题"; return; }
+    try {
+      const res = await fetch("/api/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: topic, payload: payload })
+      });
+      const data = await res.json();
+      if (!res.ok) { $("pubResult").textContent = "发布失败: " + (data.error || res.status); return; }
+      $("pubResult").textContent = "已接受，序列号 " + data.sequence;
+      log(">> publish " + topic + " = " + payload);
+    } catch (err) {
+      $("pubResult").textContent = "请求失败: " + err.message;
+    }
+  }
+
+  $("connectBtn").addEventListener("click", connect);
+  $("disconnectBtn").addEventListener("click", () => { if (ws) ws.close(); });
+  $("subBtn").addEventListener("click", () => {
+    const topic = $("subTopic").value.trim();
+    if (topic && send("sub " + topic)) log(">> sub " + topic);
+  });
+  $("unsubBtn").addEventListener("click", () => {
+    const topic = $("subTopic").value.trim();
+    if (topic && send("unsub " + topic)) log(">> unsub " + topic);
+  });
+  $("pubBtn").addEventListener("click", publish);
+  $("clearBtn").addEventListener("click", () => { $("events").textContent = "（尚未收到事件）"; });
+  $("ackBtn").addEventListener("click", () => {
+    if (lastSeq > 0 && send("ack " + lastSeq)) log(">> ack " + lastSeq);
+  });
+  $("statusBtn").addEventListener("click", refreshStatus);
+})();
+</script>
+</body>
+</html>
